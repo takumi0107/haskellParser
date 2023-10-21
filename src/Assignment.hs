@@ -39,9 +39,12 @@ data ADT = String String
           | Block ADT
           | If ADT ADT ADT
           | Else ADT
-          | ConstList [ADT]
+          | BlockList [ADT]
           | StatementsList [ADT]
-          | Function String ADT
+          | FuncHead String ADT
+          | ParameterList [ADT]
+          | Function ADT ADT
+          | Return ADT
           | Empty
   deriving (Eq, Show)
 
@@ -100,7 +103,7 @@ parseAdtBoolean :: Parser ADT
 parseAdtBoolean = Boolean <$> parseBoolean
 
 adtValue :: Parser ADT
-adtValue = parseAdtInt <|> parseAdtString <|> parseAdtBoolean <|> parseAdtVariable <|> parseAdtList
+adtValue = parseAdtInt <|> parseAdtString <|> parseAdtBoolean <|> parseAdtFuncHead <|> parseAdtVariable <|> parseAdtList
 
 
 -- >>> parse parseAdtList "[1,2,3]"
@@ -228,7 +231,7 @@ bracketTernaryExpr =
     spaces
     pure $ ternaryOp e1 e2 e3
 
--- >>> parse parseExerciseA "(((true)))"
+-- >>> parse parseExerciseA "(parse(5))"
 -- Result >< Boolean True
 parseExerciseA :: Parser ADT
 parseExerciseA = 
@@ -249,14 +252,23 @@ prettyPrintList (x:xs) = "[" ++ prettyPrintExerciseA x ++ prettyPrintRest xs
     prettyPrintRest [] = "]"
     prettyPrintRest (y:ys) = ", " ++ prettyPrintExerciseA y ++ prettyPrintRest ys
 
+prettyPrintParameterList :: [ADT] -> String
+prettyPrintParameterList [] = ""
+prettyPrintParameterList (x:xs) = prettyPrintExerciseA x ++ prettyPrintRest xs
+  where
+    prettyPrintRest [] = ""
+    prettyPrintRest (y:ys) = ", " ++ prettyPrintExerciseA y ++ prettyPrintRest ys
+
 prettyPrintExerciseA :: ADT -> String
 prettyPrintExerciseA adt = case adt of
-  String s -> "\" ++ s ++ \""
+  String s -> "\"" ++ s ++ "\""
   Integer i -> show i
   Boolean True -> "true"
   Boolean False -> "false"
   List l -> prettyPrintList l
   Variable variable -> variable
+  FuncHead variable parameter -> variable ++ "(" ++ prettyPrintExerciseA parameter ++ ")"
+  ParameterList l -> prettyPrintParameterList l
   Not a -> "!" ++ prettyPrintExerciseA a
   And a b -> prettyPrintExerciseA a ++ " && " ++ prettyPrintExerciseA b
   Or a b -> prettyPrintExerciseA a ++ " || " ++ prettyPrintExerciseA b
@@ -287,11 +299,13 @@ parseAdtVariable = do
   case variable of
     "" -> empty
     _  -> pure $ Variable variable
+-- >>> parse adtContExpr "const fc2 = parseInt(\"12\");"
+-- Result >;< AdtConst (Variable "fc2") (FuncHead "parseInt" (ParameterList [String "12"]))
 
--- >>> parse multipleAdtConstExpr "const fc1 = parseInt(\"1234\");"
--- Result >< ConstList [AdtConst (Variable "aVariable") (Integer 4)]
+-- >>> parse multipleAdtConstExpr "const fc2 = parseInt(\"12\", 11);"
+-- Result >< BlockList [AdtConst (Variable "fc2") (FuncHead "parseInt" (ParameterList [String "12",Integer 11]))]
 -- >>> parse multipleAdtConstExpr "const a2_3aBcD=1; const a2_3aBcD1=1;   const    b2 =2   ;"
--- Result >< ConstList [AdtConst (Variable "a2_3aBcD") (Integer 1),AdtConst (Variable "a2_3aBcD1") (Integer 1),AdtConst (Variable "b2") (Integer 2)]
+-- Result >< BlockList [AdtConst (Variable "a2_3aBcD") (Integer 1),AdtConst (Variable "a2_3aBcD1") (Integer 1),AdtConst (Variable "b2") (Integer 2)]
 adtContExpr :: Parser ADT
 adtContExpr = do
     spaces
@@ -304,16 +318,17 @@ adtContExpr = do
     value <- parseExerciseA
     spaces
     pure $ constOp variable value
-
+-- >>> parse multipleAdtConstExpr "const a = 1; return ((a + b) + parseInt(\"123\"));"
+-- Result >< BlockList [AdtConst (Variable "a") (Integer 1),Return (Plus (Plus (Variable "a") (Variable "b")) (FuncHead "parseInt" (ParameterList [String "123"])))]
 multipleAdtConstExpr :: Parser ADT
-multipleAdtConstExpr = ConstList <$> (sepBy adtContExpr (charTok ';') <* charTok ';')
+multipleAdtConstExpr = BlockList <$> (sepBy (adtContExpr <|> adtReturnExpr) (charTok ';') <* charTok ';')
 
 -- >>> parse parseAdtBlock "{}"
 -- Result >< Block Empty
 -- >>> parse parseAdtBlock "{const a = 1; const b = 2; const c = 3;}"
--- Result >< Block (ConstList [AdtConst (Variable "a") (Integer 1),AdtConst (Variable "b") (Integer 2),AdtConst (Variable "c") (Integer 3)])
+-- Result >< Block (BlockList [AdtConst (Variable "a") (Integer 1),AdtConst (Variable "b") (Integer 2),AdtConst (Variable "c") (Integer 3)])
 -- >>> parse parseAdtBlock "{const a = 1; const b = (a + 1); }"
--- Result >< Block (ConstList [AdtConst (Variable "a") (Integer 1),AdtConst (Variable "b") (Plus (Variable "a") (Integer 1))])
+-- Result >< Block (BlockList [AdtConst (Variable "a") (Integer 1),AdtConst (Variable "b") (Plus (Variable "a") (Integer 1))])
 parseAdtBlock :: Parser ADT
 parseAdtBlock = do
     spaces
@@ -375,20 +390,20 @@ parseConditionalIf = do
 parseConditional :: Parser ADT
 parseConditional = parseConditionalIfElse <|> parseConditionalIf <|> multipleAdtConstExpr
 -- >>> parse parseExerciseB "{    }"
--- Result >< Block Empty
+-- Result >< StatementsList [Block Empty]
 -- >>> parse parseExerciseB "{ const variableA = 1; const variableB = 2; }"
--- Result >< Block (ConstList [AdtConst (Variable "variableA") (Integer 1),AdtConst (Variable "variableB") (Integer 2)])
+-- Result >< StatementsList [Block (BlockList [AdtConst (Variable "variableA") (Integer 1),AdtConst (Variable "variableB") (Integer 2)])]
 -- >>> parse parseExerciseB "const    list =[2,3,4]   ;"
--- Result >< ConstList [AdtConst (Variable "list") (List [Integer 2,Integer 3,Integer 4])]
+-- Result >< StatementsList [BlockList [AdtConst (Variable "list") (List [Integer 2,Integer 3,Integer 4])]]
 
 -- >>> parse parseExerciseB "{ const variableA = 1; const variableB = 2; }"
--- Result >< [Block (ConstList [AdtConst (Variable "variableA") (Integer 1),AdtConst (Variable "variableB") (Integer 2)])]
+-- Result >< StatementsList [Block (BlockList [AdtConst (Variable "variableA") (Integer 1),AdtConst (Variable "variableB") (Integer 2)])]
 
 -- >>> parse parseExerciseB "if ( (true && false) ){const a = 1;const b = (a + 1);} const if2 = (true ? 1 : 4);if ( (true && false) ){const a = 1;const b = (a + 1);}"
--- Result >< [If (And (Boolean True) (Boolean False)) (Block (ConstList [AdtConst (Variable "a") (Integer 1),AdtConst (Variable "b") (Plus (Variable "a") (Integer 1))])) Empty,ConstList [AdtConst (Variable "if2") (TernaryIf (Boolean True) (Integer 1) (Integer 4))],If (And (Boolean True) (Boolean False)) (Block (ConstList [AdtConst (Variable "a") (Integer 1),AdtConst (Variable "b") (Plus (Variable "a") (Integer 1))])) Empty]
+-- Result >< StatementsList [If (And (Boolean True) (Boolean False)) (Block (BlockList [AdtConst (Variable "a") (Integer 1),AdtConst (Variable "b") (Plus (Variable "a") (Integer 1))])) Empty,BlockList [AdtConst (Variable "if2") (TernaryIf (Boolean True) (Integer 1) (Integer 4))],If (And (Boolean True) (Boolean False)) (Block (BlockList [AdtConst (Variable "a") (Integer 1),AdtConst (Variable "b") (Plus (Variable "a") (Integer 1))])) Empty]
 
 -- >>> parse parseExerciseB "if ( (!false) ) { const a = 1; const b = (a + 1); } else { const a = (true ? 1 : 2); const b = (a - 1); } const if2 = (true ? 1 : 4);"
--- Result >< StatementsList [If (Not (Boolean False)) (Block (ConstList [AdtConst (Variable "a") (Integer 1),AdtConst (Variable "b") (Plus (Variable "a") (Integer 1))])) (Else (Block (ConstList [AdtConst (Variable "a") (TernaryIf (Boolean True) (Integer 1) (Integer 2)),AdtConst (Variable "b") (Minus (Variable "a") (Integer 1))]))),ConstList [AdtConst (Variable "if2") (TernaryIf (Boolean True) (Integer 1) (Integer 4))]]
+-- Result >< StatementsList [If (Not (Boolean False)) (Block (BlockList [AdtConst (Variable "a") (Integer 1),AdtConst (Variable "b") (Plus (Variable "a") (Integer 1))])) (Else (Block (BlockList [AdtConst (Variable "a") (TernaryIf (Boolean True) (Integer 1) (Integer 2)),AdtConst (Variable "b") (Minus (Variable "a") (Integer 1))]))),BlockList [AdtConst (Variable "if2") (TernaryIf (Boolean True) (Integer 1) (Integer 4))]]
 parseExerciseB :: Parser ADT
 parseExerciseB = StatementsList <$> many(multipleAdtConstExpr <|> parseAdtBlock <|> parseConditional)
     
@@ -402,35 +417,82 @@ prettyPrintBlock (x:xs) = "{\n " ++ prettyPrintExerciseB x ++ prettyPrintRest xs
 prettyPrintExerciseB :: ADT -> String
 prettyPrintExerciseB adt = case adt of
   AdtConst variable value -> "const " ++ prettyPrintExerciseA variable ++ " = " ++ prettyPrintExerciseA value
-  ConstList l ->  foldr (\x acc -> prettyPrintExerciseB x ++ ";" ++ acc) "" l
+  BlockList l ->  foldr (\x acc -> prettyPrintExerciseB x ++ ";" ++ acc) "" l
   Block Empty -> "{}"
-  Block (ConstList l) -> prettyPrintBlock l
+  Block (BlockList l) -> prettyPrintBlock l
   If a b Empty -> "if (" ++ prettyPrintExerciseA a ++ ") " ++ prettyPrintExerciseB b
   If a b (Else c) -> "if (" ++ prettyPrintExerciseA a ++ ") " ++ prettyPrintExerciseB b ++ " else " ++ prettyPrintExerciseB c
   StatementsList l -> foldr (\x acc -> prettyPrintExerciseB x ++ "\n" ++ acc) "" l
+  Return value -> "return " ++ prettyPrintExerciseA value
   _ -> "You must write a pretty printer!"
 
 -- | Exercise C
 
--- >>> parse parseAdtVariable "parseInt(\"1234\");"
--- Result >("1234");< Variable "parseInt"
-parseAdtFunction :: Parser ADT
-parseAdtFunction =  do
+-- >>> parse parseAdtFuncHead "parseInt(\"1234\", 1);"
+-- Result >;< FuncHead "parseInt" (ParameterList [String "1234",Integer 1])
+parseAdtFuncHead :: Parser ADT
+parseAdtFuncHead =  do
     spaces
     variable <- many (satisfy (\c -> isAlphaNum c || isAlpha c || isDigit c || c == '_'))
     spaces
-    parameter <- parseExerciseA
+    parameter <- charTok '(' *> (ParameterList <$> adtValue `sepBy` commaTok) <* charTok ')'
     case variable of
       "" -> empty
-      _  -> pure $ Function variable parameter
+      _  -> pure $ FuncHead variable parameter
+
+parseAdtFunction :: Parser (ADT -> ADT -> ADT)
+parseAdtFunction = stringTok "function" >> pure Function
+
+parseAdtReturn :: Parser (ADT -> ADT)
+parseAdtReturn = stringTok "return" >> pure Return
+-- >>> parse parseExerciseA "(parseInt(\"123\"))"
+-- Unexpected character: "("
+
+-- >>> parse adtReturnExpr "return ((a + b) + parseInt(\"123\"));"
+-- Result >;< Return (Plus (Plus (Variable "a") (Variable "b")) (FuncHead "parseInt" (ParameterList [String "123"])))
+adtReturnExpr :: Parser ADT
+adtReturnExpr = do
+  spaces
+  returnOp <- parseAdtReturn
+  spaces
+  value <- parseExerciseA
+  spaces
+  pure $ returnOp value
+-- >>> parse adtFunctionExpr "function a(x, y, z) {const b = 3;}"
+-- Result >< Function (FuncHead "a" (ParameterList [Variable "x",Variable "y",Variable "z"])) (Block (BlockList [AdtConst (Variable "b") (Integer 3)]))
+-- >>> parse adtFunctionExpr "function someNumber2(a, b) {const a = 1; return ((a + c) + parseInt(\"123\"));}"
+-- Result >< Function (FuncHead "someNumber2" (ParameterList [Variable "a",Variable "b"])) (Block (BlockList [AdtConst (Variable "a") (Integer 1),Return (Plus (Plus (Variable "a") (Variable "c")) (FuncHead "parseInt" (ParameterList [String "123"])))]))
+
+-- >>> parse adtFunctionExpr "function fibonacci(n, pprev, prev) {if (((n < 0) || (n === 0))) { return pprev; }}"
+-- Unexpected character: "i"
+adtFunctionExpr :: Parser ADT
+adtFunctionExpr = do
+  spaces
+  functionOp <- parseAdtFunction
+  spaces
+  functionHead <- parseAdtFuncHead
+  spaces
+  functionBlock <- parseAdtBlock
+  spaces
+  pure $ functionOp functionHead functionBlock
+
 -- This function should determine if the given code is a tail recursive function
 isTailRecursive :: String -> Bool
 isTailRecursive _ = False
 
+-- >>> parse parseExerciseC "const fc2 = parseInt(\"12\", 10);"
+-- Result >< BlockList [AdtConst (Variable "fc2") (FuncHead "parseInt" (ParameterList [String "12",Integer 10]))]
+-- >>> parse parseExerciseC "function someNumber2(c, b) {const a = 1; return ((a + b) + parseInt(\"123\"));}"
+-- Result >< Function (FuncHead "someNumber2" (ParameterList [Variable "c",Variable "b"])) (Block (BlockList [AdtConst (Variable "a") (Integer 1),Return (Plus (Plus (Variable "a") (Variable "b")) (FuncHead "parseInt" (ParameterList [String "123"])))]))
 parseExerciseC :: Parser ADT
-parseExerciseC = parseAdtFunction
+parseExerciseC = multipleAdtConstExpr <|> adtFunctionExpr
 
 prettyPrintExerciseC :: ADT -> String
 prettyPrintExerciseC adt = case adt of
-    Function variable parameter -> variable ++ "(" ++ prettyPrintExerciseA parameter ++ ")"
-    _ -> "You must write a pretty printer!"
+  AdtConst variable value -> "const " ++ prettyPrintExerciseA variable ++ " = " ++ prettyPrintExerciseA value
+  BlockList l -> foldr (\x acc -> prettyPrintExerciseC x ++ ";" ++ acc) "" l
+  Block Empty -> "{}"
+  Block (BlockList l) -> prettyPrintBlock l
+  Function functionHead functionBlock -> "function " ++ prettyPrintExerciseA functionHead ++ " " ++ prettyPrintExerciseC functionBlock
+  Return value -> "return " ++ prettyPrintExerciseA value
+  _ -> "You must write a pretty printer!"
