@@ -234,7 +234,7 @@ bracketTernaryExpr =
 -- >>> parse parseExerciseA "(parse(5))"
 -- Result >< Boolean True
 parseExerciseA :: Parser ADT
-parseExerciseA = 
+parseExerciseA =
   bracketBinaryExpr <|> bracketTernaryExpr <|> do
     spaces
     charTok '('
@@ -318,23 +318,28 @@ adtContExpr = do
     value <- parseExerciseA
     spaces
     pure $ constOp variable value
--- >>> parse multipleAdtConstExpr "const a = 1; return ((a + b) + parseInt(\"123\"));"
--- Result >< BlockList [AdtConst (Variable "a") (Integer 1),Return (Plus (Plus (Variable "a") (Variable "b")) (FuncHead "parseInt" (ParameterList [String "123"])))]
+-- >>> parse multipleAdtConstExpr "const a = 1; return ((c + b) + parseInt(\"123\"));"
+-- Result >< BlockList [AdtConst (Variable "a") (Integer 1),Return (Plus (Plus (Variable "c") (Variable "b")) (FuncHead "parseInt" (ParameterList [String "123"])))]
+-- >>> parse multipleAdtConstExpr "return factorial((n - 1), (acc * n));"
+-- Unexpected character: "("
 multipleAdtConstExpr :: Parser ADT
 multipleAdtConstExpr = BlockList <$> (sepBy (adtContExpr <|> adtReturnExpr) (charTok ';') <* charTok ';')
+-- Result >return factorial((n - 1), (acc * n));< If (Or (Lt (Variable "n") (Integer 0)) (Eq (Variable "n") (Integer 0))) (Block (BlockList [Return (Variable "acc")])) Empty
 
 -- >>> parse parseAdtBlock "{}"
--- Result >< Block Empty
+-- Result >< Block (BlockList [])
 -- >>> parse parseAdtBlock "{const a = 1; const b = 2; const c = 3;}"
--- Result >< Block (BlockList [AdtConst (Variable "a") (Integer 1),AdtConst (Variable "b") (Integer 2),AdtConst (Variable "c") (Integer 3)])
+-- Result >< Block (BlockList [BlockList [AdtConst (Variable "a") (Integer 1),AdtConst (Variable "b") (Integer 2),AdtConst (Variable "c") (Integer 3)]])
 -- >>> parse parseAdtBlock "{const a = 1; const b = (a + 1); }"
--- Result >< Block (BlockList [AdtConst (Variable "a") (Integer 1),AdtConst (Variable "b") (Plus (Variable "a") (Integer 1))])
+-- Result >< Block (BlockList [BlockList [AdtConst (Variable "a") (Integer 1),AdtConst (Variable "b") (Plus (Variable "a") (Integer 1))]])
+-- >>> parse parseAdtBlock "{if (((n < 0) || (n === 0))) { return acc; }return factorial((n - 1), (acc * n));}"
+-- Result >< Block (BlockList [If (Or (Lt (Variable "n") (Integer 0)) (Eq (Variable "n") (Integer 0))) (Block (BlockList [BlockList [Return (Variable "acc")]])) Empty,BlockList [Return (FuncHead "factorial" (ParameterList [Minus (Variable "n") (Integer 1),Times (Variable "acc") (Variable "n")]))]])
 parseAdtBlock :: Parser ADT
 parseAdtBlock = do
     spaces
     charTok '{'
     spaces
-    content <- multipleAdtConstExpr <|> pure Empty
+    content <- multipleConditionalBlock <|> pure Empty
     spaces
     charTok '}'
     spaces
@@ -347,12 +352,12 @@ parseAdtIf = stringTok "if" >> pure If
 
 parseAdtElse :: Parser (ADT -> ADT)
 parseAdtElse = stringTok "else" >> pure Else
--- >>> parse parseConditional "if (true) {}"
--- Result >< If (Boolean True) (Block Empty) Empty
+-- >>> parse parseConditional "if (((n < 0) || (n === 0))) { return pprev; }"
+-- Result >< If (Or (Lt (Variable "n") (Integer 0)) (Eq (Variable "n") (Integer 0))) (Block (BlockList [Return (Variable "pprev")])) Empty
 -- >>> parse parseConditional "if ( (true && false) ){const a = 1;const b = (a + 1);}"
--- Result >< If (And (Boolean True) (Boolean False)) (Block (List [AdtConst (Variable "a") (Integer 1),AdtConst (Variable "b") (Plus (Variable "a") (Integer 1))])) Empty
+-- Result >< If (And (Boolean True) (Boolean False)) (Block (BlockList [AdtConst (Variable "a") (Integer 1),AdtConst (Variable "b") (Plus (Variable "a") (Integer 1))])) Empty
 -- >>> parse parseConditional "if ((true && false)){const a = 1; const b = 1;}"
--- Result >< If (And (Boolean True) (Boolean False)) (Block (List [AdtConst (Variable "a") (Integer 1),AdtConst (Variable "b") (Integer 1)])) Empty
+-- Result >< If (And (Boolean True) (Boolean False)) (Block (BlockList [AdtConst (Variable "a") (Integer 1),AdtConst (Variable "b") (Integer 1)])) Empty
 parseConditionalIfElse :: Parser ADT
 parseConditionalIfElse = do
       spaces
@@ -387,10 +392,17 @@ parseConditionalIf = do
       spaces
       pure $ ifOp condition ifBlock Empty
 
+-- >>> parse parseConditional "if (((n < 0) || (n === 0))) { return acc; }return factorial((n - 1), (acc * n));"
+-- Result >return factorial((n - 1), (acc * n));< If (Or (Lt (Variable "n") (Integer 0)) (Eq (Variable "n") (Integer 0))) (Block (BlockList [Return (Variable "acc")])) Empty
 parseConditional :: Parser ADT
-parseConditional = parseConditionalIfElse <|> parseConditionalIf <|> multipleAdtConstExpr
--- >>> parse parseExerciseB "{    }"
--- Result >< StatementsList [Block Empty]
+parseConditional = parseConditionalIfElse <|> parseConditionalIf
+
+-- >>> parse multipleConditionalBlock "if (((n < 0) || (n === 0))) { return pprev; }if ((n === 1)) { return prev; }1`"
+-- Result >< BlockList [If (Or (Lt (Variable "n") (Integer 0)) (Eq (Variable "n") (Integer 0))) (Block (BlockList [Return (Variable "pprev")])) Empty,If (Eq (Variable "n") (Integer 1)) (Block (BlockList [Return (Variable "prev")])) Empty,BlockList [Return (FuncHead "fibonacci" (ParameterList [Minus (Variable "n") (Integer 1),Variable "prev",Plus (Variable "pprev") (Variable "prev")]))]]
+multipleConditionalBlock :: Parser ADT
+multipleConditionalBlock = BlockList <$> many (parseConditional <|> multipleAdtConstExpr)
+
+-- >>> parse adtReturnExpr "return a"
 -- >>> parse parseExerciseB "{ const variableA = 1; const variableB = 2; }"
 -- Result >< StatementsList [Block (BlockList [AdtConst (Variable "variableA") (Integer 1),AdtConst (Variable "variableB") (Integer 2)])]
 -- >>> parse parseExerciseB "const    list =[2,3,4]   ;"
@@ -405,8 +417,8 @@ parseConditional = parseConditionalIfElse <|> parseConditionalIf <|> multipleAdt
 -- >>> parse parseExerciseB "if ( (!false) ) { const a = 1; const b = (a + 1); } else { const a = (true ? 1 : 2); const b = (a - 1); } const if2 = (true ? 1 : 4);"
 -- Result >< StatementsList [If (Not (Boolean False)) (Block (BlockList [AdtConst (Variable "a") (Integer 1),AdtConst (Variable "b") (Plus (Variable "a") (Integer 1))])) (Else (Block (BlockList [AdtConst (Variable "a") (TernaryIf (Boolean True) (Integer 1) (Integer 2)),AdtConst (Variable "b") (Minus (Variable "a") (Integer 1))]))),BlockList [AdtConst (Variable "if2") (TernaryIf (Boolean True) (Integer 1) (Integer 4))]]
 parseExerciseB :: Parser ADT
-parseExerciseB = StatementsList <$> many(multipleAdtConstExpr <|> parseAdtBlock <|> parseConditional)
-    
+parseExerciseB = StatementsList <$> many (multipleAdtConstExpr <|> parseAdtBlock <|> parseConditional)
+
 prettyPrintBlock :: [ADT] -> String
 prettyPrintBlock [] = "[]"
 prettyPrintBlock (x:xs) = "{\n " ++ prettyPrintExerciseB x ++ prettyPrintRest xs
@@ -430,12 +442,14 @@ prettyPrintExerciseB adt = case adt of
 
 -- >>> parse parseAdtFuncHead "parseInt(\"1234\", 1);"
 -- Result >;< FuncHead "parseInt" (ParameterList [String "1234",Integer 1])
+-- >>> parse parseAdtFuncHead "factorial((n - 1), (acc * n));"
+-- Result >;< FuncHead "factorial" (ParameterList [Minus (Variable "n") (Integer 1),Times (Variable "acc") (Variable "n")])
 parseAdtFuncHead :: Parser ADT
 parseAdtFuncHead =  do
     spaces
     variable <- many (satisfy (\c -> isAlphaNum c || isAlpha c || isDigit c || c == '_'))
     spaces
-    parameter <- charTok '(' *> (ParameterList <$> adtValue `sepBy` commaTok) <* charTok ')'
+    parameter <- charTok '(' *> (ParameterList <$> parseExerciseA `sepBy` commaTok) <* charTok ')'
     case variable of
       "" -> empty
       _  -> pure $ FuncHead variable parameter
@@ -450,6 +464,8 @@ parseAdtReturn = stringTok "return" >> pure Return
 
 -- >>> parse adtReturnExpr "return ((a + b) + parseInt(\"123\"));"
 -- Result >;< Return (Plus (Plus (Variable "a") (Variable "b")) (FuncHead "parseInt" (ParameterList [String "123"])))
+-- >>> parse adtReturnExpr "return factorial((n - 1), (acc * n));"
+-- Result >;< Return (FuncHead "factorial" (ParameterList [Minus (Variable "n") (Integer 1),Times (Variable "acc") (Variable "n")]))
 adtReturnExpr :: Parser ADT
 adtReturnExpr = do
   spaces
@@ -460,11 +476,11 @@ adtReturnExpr = do
   pure $ returnOp value
 -- >>> parse adtFunctionExpr "function a(x, y, z) {const b = 3;}"
 -- Result >< Function (FuncHead "a" (ParameterList [Variable "x",Variable "y",Variable "z"])) (Block (BlockList [AdtConst (Variable "b") (Integer 3)]))
--- >>> parse adtFunctionExpr "function someNumber2(a, b) {const a = 1; return ((a + c) + parseInt(\"123\"));}"
--- Result >< Function (FuncHead "someNumber2" (ParameterList [Variable "a",Variable "b"])) (Block (BlockList [AdtConst (Variable "a") (Integer 1),Return (Plus (Plus (Variable "a") (Variable "c")) (FuncHead "parseInt" (ParameterList [String "123"])))]))
+-- >>> parse adtFunctionExpr "function someNumber2(c, b) {const a = 1; return ((a + c) + parseInt(\"123\"));}"
+-- Result >< Function (FuncHead "someNumber2" (ParameterList [Variable "c",Variable "b"])) (Block (BlockList [AdtConst (Variable "a") (Integer 1),Return (Plus (Plus (Variable "a") (Variable "c")) (FuncHead "parseInt" (ParameterList [String "123"])))]))
 
--- >>> parse adtFunctionExpr "function fibonacci(n, pprev, prev) {if (((n < 0) || (n === 0))) { return pprev; }}"
--- Unexpected character: "i"
+-- >>> parse adtFunctionExpr "function fibonacci(n, pprev, prev) {if (((n < 0) || (n === 0))) { return pprev; };}"
+-- Result >< Function (FuncHead "fibonacci" (ParameterList [Variable "n",Variable "pprev",Variable "prev"])) (Block (BlockList [If (Or (Lt (Variable "n") (Integer 0)) (Eq (Variable "n") (Integer 0))) (Block (BlockList [Return (Variable "pprev")])) Empty]))
 adtFunctionExpr :: Parser ADT
 adtFunctionExpr = do
   spaces
@@ -477,13 +493,61 @@ adtFunctionExpr = do
   pure $ functionOp functionHead functionBlock
 
 -- This function should determine if the given code is a tail recursive function
+-- >>> isTailRecursive "function tail(n) {if ((n > 0)) {return tail((n-1)); }}"
+-- False
+-- >>> isTailRecursive "function factorial(n, acc) {if (((n < 0) || (n === 0))) {const b=2; return acc; }return factorial((n - 1), (acc * n));}"
+-- True
+-- >>> isTailRecursive "function fibonacci(n, pprev, prev) {if (((n < 0) || (n === 0))) { return pprev; }if ((n === 1)) { return prev; }return fibonacci((n - 1), prev, (pprev + prev));}"
+-- True
+-- >>> isTailRecursive "function fibonacci(n) {if (((n < 0) || (n === 0))) { return 0; }if ((n === 1)) { return 1; }return (fibonacci((n - 1)) + fibonacci((n - 2))); }"
+-- False
 isTailRecursive :: String -> Bool
-isTailRecursive _ = False
+isTailRecursive function = case parse parseExerciseC function of
+  Result _ (Function (FuncHead functionName (ParameterList params)) (Block (BlockList l))) -> normalReturnCheck l && atEndReturnCheck l [Empty] False && recursiveCheck l [Empty] functionName (length params)
+
+normalReturnCheck :: [ADT] -> Bool
+normalReturnCheck [] = False
+normalReturnCheck (x:xs) = case x of
+  If _ (Block (BlockList l))  _ -> normalReturnCheck l
+  AdtConst _ _-> True
+  Block (BlockList l) -> normalReturnCheck l
+  BlockList l -> normalReturnCheck l
+  Return( FuncHead functionName (ParameterList params)) -> False
+  Return value -> True
+  _ -> False
+
+atEndReturnCheck :: [ADT] -> [ADT] -> Bool -> Bool
+atEndReturnCheck [] _ True = True
+atEndReturnCheck [] _ False = False
+atEndReturnCheck (x:xs) [Empty] _ = atEndReturnCheck (x:xs) xs False
+atEndReturnCheck (x:xs) remaining _ = case x of
+  If _ (Block (BlockList l)) _ -> atEndReturnCheck l remaining False
+  Block (BlockList l) -> atEndReturnCheck l remaining False
+  AdtConst _ _-> atEndReturnCheck remaining [Empty] False
+  BlockList l -> atEndReturnCheck l remaining False
+  Return (FuncHead functionName (ParameterList params)) -> atEndReturnCheck xs [Empty] True
+  Return value -> atEndReturnCheck remaining [Empty] False
+  _ -> False
+
+recursiveCheck :: [ADT] -> [ADT] -> String -> Int -> Bool
+recursiveCheck [] _ _ _ = False
+recursiveCheck (x:xs) [Empty] functionName paramNum = recursiveCheck (x:xs) xs functionName paramNum
+recursiveCheck (x:xs) remaining functionName paramNum = case x of
+  If _ (Block (BlockList l))  _ -> recursiveCheck l remaining functionName paramNum
+  Block (BlockList l) -> recursiveCheck l remaining functionName paramNum
+  AdtConst _ _-> recursiveCheck remaining [Empty] functionName paramNum
+  BlockList l -> recursiveCheck l remaining functionName paramNum
+  Return( FuncHead name (ParameterList params)) -> name == functionName && length params == paramNum
+  Return value -> recursiveCheck remaining [Empty] functionName paramNum
+  _ -> False
+
 
 -- >>> parse parseExerciseC "const fc2 = parseInt(\"12\", 10);"
 -- Result >< BlockList [AdtConst (Variable "fc2") (FuncHead "parseInt" (ParameterList [String "12",Integer 10]))]
--- >>> parse parseExerciseC "function someNumber2(c, b) {const a = 1; return ((a + b) + parseInt(\"123\"));}"
--- Result >< Function (FuncHead "someNumber2" (ParameterList [Variable "c",Variable "b"])) (Block (BlockList [AdtConst (Variable "a") (Integer 1),Return (Plus (Plus (Variable "a") (Variable "b")) (FuncHead "parseInt" (ParameterList [String "123"])))]))
+-- >>> parse parseExerciseC "function someNumber2(a, b) {const a = 1; return ((a + b) + parseInt(\"123\"));}"
+-- Result >< Function (FuncHead "someNumber2" (ParameterList [Variable "a",Variable "b"])) (Block (BlockList [BlockList [AdtConst (Variable "a") (Integer 1),Return (Plus (Plus (Variable "a") (Variable "b")) (FuncHead "parseInt" (ParameterList [String "123"])))]]))
+-- >>> parse parseExerciseC "function fibonacci(n, pprev, prev) {if (((n < 0) || (n === 0))) { return pprev; }if ((n === 1)) { return prev; }return fibonacci((n - 1), prev, (pprev + prev));}"
+-- Result >< Function (FuncHead "fibonacci" (ParameterList [Variable "n",Variable "pprev",Variable "prev"])) (Block (BlockList [If (Or (Lt (Variable "n") (Integer 0)) (Eq (Variable "n") (Integer 0))) (Block (BlockList [BlockList [Return (Variable "pprev")]])) Empty,If (Eq (Variable "n") (Integer 1)) (Block (BlockList [BlockList [Return (Variable "prev")]])) Empty,BlockList [Return (FuncHead "fibonacci" (ParameterList [Minus (Variable "n") (Integer 1),Variable "prev",Plus (Variable "pprev") (Variable "prev")]))]]))
 parseExerciseC :: Parser ADT
 parseExerciseC = multipleAdtConstExpr <|> adtFunctionExpr
 
