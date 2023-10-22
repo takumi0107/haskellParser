@@ -419,19 +419,29 @@ multipleConditionalBlock = BlockList <$> many (parseConditional <|> multipleAdtC
 parseExerciseB :: Parser ADT
 parseExerciseB = StatementsList <$> many (multipleAdtConstExpr <|> parseAdtBlock <|> parseConditional)
 
-prettyPrintBlock :: [ADT] -> String
-prettyPrintBlock [] = "[]"
-prettyPrintBlock (x:xs) = "{\n " ++ prettyPrintExerciseB x ++ prettyPrintRest xs
-  where
-    prettyPrintRest [] = ";\n}"
-    prettyPrintRest (y:ys) = ";\n " ++ prettyPrintExerciseB y ++ prettyPrintRest ys
+
+prettyPrintBlock :: [ADT] -> Bool -> String
+prettyPrintBlock [] _ = "{}"
+prettyPrintBlock adts False = "{" ++ prettyPrintBlock' adts 1 ++ "\n}"
+prettyPrintBlock adts True = "{\n  while (true) {" ++ prettyPrintBlock' adts 2 ++ "\n  }\n}"
+
+prettyPrintBlock' :: [ADT] -> Int -> String
+prettyPrintBlock' [] _ = ""
+prettyPrintBlock' (x:xs) indent = case x of
+  BlockList l -> prettyPrintBlock' l indent ++ prettyPrintBlock' xs indent
+  Block (BlockList l) -> "{" ++ prettyPrintBlock' l (indent + 1) ++ prettyPrintBlock' xs indent  ++ "\n" ++ replicate (indent * 2) ' ' ++ "}"
+  If a b Empty -> "\n" ++ replicate (indent * 2) ' ' ++ "if (" ++ prettyPrintExerciseA a ++ ") " ++ prettyPrintBlock' [b] indent ++ prettyPrintBlock' xs indent
+  If a b (Else c) -> "\n" ++ replicate (indent * 2) ' ' ++ "if (" ++ prettyPrintExerciseA a ++ ") " ++ prettyPrintBlock' [b] indent ++ " else " ++ prettyPrintBlock' [c] indent ++ prettyPrintBlock' xs indent
+  _ -> "\n" ++ replicate (indent * 2) ' ' ++ prettyPrintExerciseB x ++ ";" ++ prettyPrintBlock' xs indent
+
+
 
 prettyPrintExerciseB :: ADT -> String
 prettyPrintExerciseB adt = case adt of
   AdtConst variable value -> "const " ++ prettyPrintExerciseA variable ++ " = " ++ prettyPrintExerciseA value
   BlockList l ->  foldr (\x acc -> prettyPrintExerciseB x ++ ";" ++ acc) "" l
   Block Empty -> "{}"
-  Block (BlockList l) -> prettyPrintBlock l
+  Block (BlockList l) -> prettyPrintBlock l False
   If a b Empty -> "if (" ++ prettyPrintExerciseA a ++ ") " ++ prettyPrintExerciseB b
   If a b (Else c) -> "if (" ++ prettyPrintExerciseA a ++ ") " ++ prettyPrintExerciseB b ++ " else " ++ prettyPrintExerciseB c
   StatementsList l -> foldr (\x acc -> prettyPrintExerciseB x ++ "\n" ++ acc) "" l
@@ -501,9 +511,15 @@ adtFunctionExpr = do
 -- True
 -- >>> isTailRecursive "function fibonacci(n) {if (((n < 0) || (n === 0))) { return 0; }if ((n === 1)) { return 1; }return (fibonacci((n - 1)) + fibonacci((n - 2))); }"
 -- False
+isTailRecursiveAdt :: ADT -> Bool
+isTailRecursiveAdt adt = case adt of
+  Function (FuncHead functionName (ParameterList params)) (Block (BlockList l)) -> normalReturnCheck l && atEndReturnCheck l [Empty] False && recursiveCheck l [Empty] functionName (length params)
+  _ -> False
+
 isTailRecursive :: String -> Bool
 isTailRecursive function = case parse parseExerciseC function of
   Result _ (Function (FuncHead functionName (ParameterList params)) (Block (BlockList l))) -> normalReturnCheck l && atEndReturnCheck l [Empty] False && recursiveCheck l [Empty] functionName (length params)
+  _ -> False
 
 normalReturnCheck :: [ADT] -> Bool
 normalReturnCheck [] = False
@@ -549,14 +565,30 @@ recursiveCheck (x:xs) remaining functionName paramNum = case x of
 -- >>> parse parseExerciseC "function fibonacci(n, pprev, prev) {if (((n < 0) || (n === 0))) { return pprev; }if ((n === 1)) { return prev; }return fibonacci((n - 1), prev, (pprev + prev));}"
 -- Result >< Function (FuncHead "fibonacci" (ParameterList [Variable "n",Variable "pprev",Variable "prev"])) (Block (BlockList [If (Or (Lt (Variable "n") (Integer 0)) (Eq (Variable "n") (Integer 0))) (Block (BlockList [BlockList [Return (Variable "pprev")]])) Empty,If (Eq (Variable "n") (Integer 1)) (Block (BlockList [BlockList [Return (Variable "prev")]])) Empty,BlockList [Return (FuncHead "fibonacci" (ParameterList [Minus (Variable "n") (Integer 1),Variable "prev",Plus (Variable "pprev") (Variable "prev")]))]]))
 parseExerciseC :: Parser ADT
-parseExerciseC = multipleAdtConstExpr <|> adtFunctionExpr
+parseExerciseC =  multipleAdtConstExpr <|> adtFunctionExpr
 
 prettyPrintExerciseC :: ADT -> String
-prettyPrintExerciseC adt = case adt of
+prettyPrintExerciseC adt = if isTailRecursiveAdt adt 
+  then tailRecursivePrettyPrint adt
+  else normalPrettyPrint adt
+
+  
+normalPrettyPrint :: ADT -> String
+normalPrettyPrint adt = case adt of
   AdtConst variable value -> "const " ++ prettyPrintExerciseA variable ++ " = " ++ prettyPrintExerciseA value
-  BlockList l -> foldr (\x acc -> prettyPrintExerciseC x ++ ";" ++ acc) "" l
+  BlockList l -> foldr (\x acc -> normalPrettyPrint x ++ ";" ++ acc) "" l
   Block Empty -> "{}"
-  Block (BlockList l) -> prettyPrintBlock l
-  Function functionHead functionBlock -> "function " ++ prettyPrintExerciseA functionHead ++ " " ++ prettyPrintExerciseC functionBlock
+  Block (BlockList l) -> prettyPrintBlock l False
+  Function functionHead functionBlock -> "function " ++ prettyPrintExerciseA functionHead ++ " " ++ normalPrettyPrint functionBlock
+  Return value -> "return " ++ prettyPrintExerciseA value
+  _ -> "You must write a pretty printer!"
+
+tailRecursivePrettyPrint :: ADT -> String
+tailRecursivePrettyPrint adt = case adt of
+  AdtConst variable value -> "const " ++ prettyPrintExerciseA variable ++ " = " ++ prettyPrintExerciseA value
+  BlockList l -> foldr (\x acc -> tailRecursivePrettyPrint x ++ ";" ++ acc) "" l
+  Block Empty -> "{}"
+  Block (BlockList l) -> prettyPrintBlock l True
+  Function functionHead functionBlock -> "function " ++ prettyPrintExerciseA functionHead ++ " " ++ tailRecursivePrettyPrint functionBlock 
   Return value -> "return " ++ prettyPrintExerciseA value
   _ -> "You must write a pretty printer!"
